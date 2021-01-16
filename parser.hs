@@ -8,11 +8,15 @@ import Debug.Trace
 import GHC
 import Data.Foldable
 import Data.Monoid
+import Data.String
 import Data.List (isPrefixOf)
 import Data.Maybe
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict ((!))
 import qualified Data.Set        as Set
+import System.Environment
+
+
 import qualified Language.Haskell.GHC.ExactPrint as Exact
 import qualified Language.Haskell.GHC.ExactPrint.Types as Exact
 import qualified Language.Haskell.GHC.ExactPrint.Parsers as Exact
@@ -98,13 +102,14 @@ pprVectorMod m = unstashCPP $ Exact.exactPrint (vecAST m) (vecAnns m)
 -- Adjust comments
 ----------------------------------------------------------------
 
-copyHaddock :: VecMod -> VecMod -> VecMod
-copyHaddock from to = to
+copyHaddock :: Set.Set RdrName -> VecMod -> VecMod -> VecMod
+copyHaddock touch from to = to
   { vecAnns = appEndo update $ vecAnns to
   }
   where
     update   = fold haddocks
-    haddocks = Map.intersectionWith copyOneHaddock (vecExpKeys from) (vecExpKeys to)
+    haddocks = (if null touch then id else flip Map.restrictKeys touch)
+             $ Map.intersectionWith copyOneHaddock (vecExpKeys from) (vecExpKeys to)
 
 copyOneHaddock :: Haddock -> Haddock -> Endo Exact.Anns
 copyOneHaddock Haddock{hdkHaddock=[]} _ = mempty
@@ -130,9 +135,42 @@ copyOneHaddock from to
 
 
 
-test :: IO ()
-test = do
-  mG <- parseVectorMod "Data/Vector/Generic.hs"
-  mV <- parseVectorMod "Data/Vector.hs"
-  let mV' = copyHaddock mG mV
-  writeFile "Data/Vector.hs" $ pprVectorMod mV'
+
+prefix :: String 
+prefix = "../vector/"
+
+pureV :: (String, [String])
+pureV =
+  ( "Data/Vector/Generic.hs"
+  , [ "Data/Vector.hs"
+    , "Data/Vector/Storable.hs"
+    , "Data/Vector/Unboxed.hs"
+    , "Data/Vector/Primitive.hs"
+    ]
+  )
+
+modPure :: Set.Set RdrName -> IO ()
+modPure names = do
+  mG <- parseVectorMod $ prefix ++ fst pureV
+  forM_ (snd pureV) $ \nm -> do
+    mV <- parseVectorMod $ prefix ++ nm
+    writeFile (prefix++nm) $ pprVectorMod $ copyHaddock names mG mV
+
+main :: IO ()
+main = do
+  getArgs >>= \case
+    "pure":names -> modPure (Set.fromList $ mkRdrName <$> names)
+-- test :: IO ()
+-- test = do
+--   mG <- parseVectorMod "../vector/Data/Vector/Generic.hs"
+--   mV <- parseVectorMod "../vector/Data/Vector.hs"
+--   let mV' = copyHaddock mG mV
+--   writeFile "../vector/Data/Vector.hs" $ pprVectorMod mV'
+
+
+
+
+mkRdrName :: String -> RdrName
+mkRdrName = RdrName.mkUnqual OccName.varName . fromString
+
+nmFoldMap = mkRdrName "foldMap"
