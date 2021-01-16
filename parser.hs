@@ -5,30 +5,22 @@
 {-# LANGUAGE StandaloneDeriving #-}
 module Main where
 
-import Debug.Trace
 import GHC
 import Data.Foldable
 import Data.Monoid
 import Data.String
-import Data.List (isPrefixOf)
-import Data.Maybe
-import qualified Data.Map.Strict as Map
+import Data.List       (isPrefixOf)
 import Data.Map.Strict ((!))
+import qualified Data.Map.Strict as Map
 import qualified Data.Set        as Set
-import System.Environment
 import Options.Applicative
 import System.FilePath ((</>))
 
-import qualified Language.Haskell.GHC.ExactPrint as Exact
-import qualified Language.Haskell.GHC.ExactPrint.Types as Exact
+import qualified Language.Haskell.GHC.ExactPrint         as Exact
+import qualified Language.Haskell.GHC.ExactPrint.Types   as Exact
 import qualified Language.Haskell.GHC.ExactPrint.Parsers as Exact
-import qualified Language.Haskell.GHC.ExactPrint.Annotate as Exact
 import qualified RdrName
 import qualified OccName
-
-import HsExtension
--- deriving instance Show RdrName.RdrName
--- deriving instance Show OccName.OccName
 
 
 ----------------------------------------------------------------
@@ -72,8 +64,8 @@ makeHaddock anns k = Haddock
 
 parseVectorMod :: FilePath -> IO VecMod
 parseVectorMod path = do
-  str <- readFile path
-  Exact.parseModuleFromString path (stashCPP str) >>= \case
+  hsStr <- readFile path
+  Exact.parseModuleFromString path (stashCPP hsStr) >>= \case
     Left  err -> do
       mapM_ print err
       error "Cannot proceed"
@@ -125,7 +117,7 @@ copyOneHaddock from to
       where
         -- Number of non-haddock lines
         n = length old - length (hdkHaddock to)
-        (keep,replace) = splitAt n old
+        (keep,_replace) = splitAt n old
         --
         merge _ [] = []
         merge ((Exact.Comment _ sp _, dp):olds) (cmt:news)
