@@ -143,7 +143,7 @@ modPure prefix names = do
   mG <- parseVectorMod $ prefix </> fst pureV
   forM_ (snd pureV) $ \nm -> do
     mV <- parseVectorMod $ prefix </> nm
-    writeFile (prefix++nm) $ pprVectorMod $ copyHaddock names mG mV
+    writeFile (prefix </> nm) $ pprVectorMod $ copyHaddock names mG mV
 
 mkRdrName :: String -> RdrName
 mkRdrName = RdrName.mkUnqual OccName.varName . fromString
