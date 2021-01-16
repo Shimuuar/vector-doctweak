@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings  #-}
 {-# LANGUAGE RecordWildCards    #-}
 {-# LANGUAGE StandaloneDeriving #-}
-module Foo where
+module Main where
 
 import Debug.Trace
 import GHC
@@ -172,5 +172,3 @@ main = do
 
 mkRdrName :: String -> RdrName
 mkRdrName = RdrName.mkUnqual OccName.varName . fromString
-
-nmFoldMap = mkRdrName "foldMap"

@@ -1,0 +1,22 @@
+Name:           vector-doctweak
+Version:        0.1
+Synopsis:       Tool for modifying vector'documentation
+Description:
+
+Cabal-Version:  >= 1.10
+License:        BSD3
+License-File:   LICENSE
+Author:         Aleksey Khudyakov <alexey.skladnoy@gmail.com>
+Maintainer:     Aleksey Khudyakov <alexey.skladnoy@gmail.com>
+Homepage:       http://github.org/Shimuuar/vector-doctweak
+Category:       Data
+Build-Type:     Simple
+
+Executable vector-doctweak
+  Ghc-options:         -Wall
+  Default-Language:    Haskell2010
+  main-is:             parser.hs
+  Build-Depends: base >=3 && <5
+               , ghc
+               , ghc-exactprint
+               , containers
