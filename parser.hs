@@ -17,6 +17,7 @@ import Data.Map.Strict ((!))
 import qualified Data.Set        as Set
 import System.Environment
 import Options.Applicative
+import System.FilePath ((</>))
 
 import qualified Language.Haskell.GHC.ExactPrint as Exact
 import qualified Language.Haskell.GHC.ExactPrint.Types as Exact
@@ -135,11 +136,6 @@ copyOneHaddock from to
           : merge [] news
 
 
-
-
-prefix :: String 
-prefix = "../vector/"
-
 pureV :: (String, [String])
 pureV =
   ( "Data/Vector/Generic.hs"
@@ -150,11 +146,11 @@ pureV =
     ]
   )
 
-modPure :: Set.Set RdrName -> IO ()
-modPure names = do
-  mG <- parseVectorMod $ prefix ++ fst pureV
+modPure :: FilePath -> Set.Set RdrName -> IO ()
+modPure prefix names = do
+  mG <- parseVectorMod $ prefix </> fst pureV
   forM_ (snd pureV) $ \nm -> do
-    mV <- parseVectorMod $ prefix ++ nm
+    mV <- parseVectorMod $ prefix </> nm
     writeFile (prefix++nm) $ pprVectorMod $ copyHaddock names mG mV
 
 mkRdrName :: String -> RdrName
@@ -177,8 +173,7 @@ main = do
          <> progDesc ""
          )
   case cmd of
-    CopyHaddock{..} -> modPure (Set.fromList $ mkRdrName <$> functionNames)
-    -- copyHaddock (Set.fromList functionNames) copyPrefix
+    CopyHaddock{..} -> modPure copyPrefix (Set.fromList $ mkRdrName <$> functionNames)
 
 data Cmd
   = CopyHaddock

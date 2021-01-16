@@ -20,4 +20,5 @@ Executable vector-doctweak
                , ghc
                , ghc-exactprint
                , containers
+               , filepath
                , optparse-applicative
