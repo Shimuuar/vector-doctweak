@@ -1,3 +1,4 @@
+{-# LANGUAGE ApplicativeDo      #-}
 {-# LANGUAGE LambdaCase         #-}
 {-# LANGUAGE OverloadedStrings  #-}
 {-# LANGUAGE RecordWildCards    #-}
@@ -15,7 +16,7 @@ import qualified Data.Map.Strict as Map
 import Data.Map.Strict ((!))
 import qualified Data.Set        as Set
 import System.Environment
-
+import Options.Applicative
 
 import qualified Language.Haskell.GHC.ExactPrint as Exact
 import qualified Language.Haskell.GHC.ExactPrint.Types as Exact
@@ -156,19 +157,50 @@ modPure names = do
     mV <- parseVectorMod $ prefix ++ nm
     writeFile (prefix++nm) $ pprVectorMod $ copyHaddock names mG mV
 
-main :: IO ()
-main = do
-  getArgs >>= \case
-    "pure":names -> modPure (Set.fromList $ mkRdrName <$> names)
--- test :: IO ()
--- test = do
---   mG <- parseVectorMod "../vector/Data/Vector/Generic.hs"
---   mV <- parseVectorMod "../vector/Data/Vector.hs"
---   let mV' = copyHaddock mG mV
---   writeFile "../vector/Data/Vector.hs" $ pprVectorMod mV'
-
-
-
-
 mkRdrName :: String -> RdrName
 mkRdrName = RdrName.mkUnqual OccName.varName . fromString
+
+
+
+
+
+----------------------------------------------------------------
+-- Command line parser
+----------------------------------------------------------------
+
+main :: IO ()
+main = do
+  cmd <- customExecParser (prefs showHelpOnError)
+       $ info (helper <*> parserCLI)
+         (  fullDesc
+         <> header   "Program for working with keys for coin node"
+         <> progDesc ""
+         )
+  case cmd of
+    CopyHaddock{..} -> modPure (Set.fromList $ mkRdrName <$> functionNames)
+    -- copyHaddock (Set.fromList functionNames) copyPrefix
+
+data Cmd
+  = CopyHaddock
+    { copyPrefix    :: FilePath
+    , functionNames :: [String]
+    }
+  deriving (Show)
+
+parserCLI :: Parser Cmd
+parserCLI = subparser
+  ( command "copy"  (parserCopyPrefix  `info` header "Copy haddocks")
+  )
+
+parserCopyPrefix :: Parser Cmd
+parserCopyPrefix = helper <*> do
+  copyPrefix <- strOption ( short   'v'
+                         <> long    "vector"
+                         <> help    "path to vector's source"
+                         <> metavar "DIR"
+                         <> value   "."
+                          )
+  functionNames <- many $ strArgument ( help    "Function to copy from"
+                                     <> metavar "FUN"
+                                      )
+  pure CopyHaddock{..}
