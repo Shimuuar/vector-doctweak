@@ -148,7 +148,7 @@ copyOneHaddock vec from to
   where
     replace a = a { Exact.annPriorComments = repl $ Exact.annPriorComments a }
 
-    repl old = keep ++ merge old (hdkHaddock from)
+    repl old = keep ++ merge old (map fixup $ hdkHaddock from)
       where
         -- Number of non-haddock lines
         n = length old - length (hdkHaddock to)
@@ -156,10 +156,10 @@ copyOneHaddock vec from to
         --
         merge _ [] = []
         merge ((Exact.Comment _ sp _, dp):olds) (cmt:news)
-          = (Exact.Comment (fixup cmt) sp Nothing, dp)
+          = (Exact.Comment cmt sp Nothing, dp)
           : merge olds news
         merge [] (cmt:news)
-          = (Exact.Comment (fixup cmt) (UnhelpfulSpan "") Nothing, Exact.DP (1,0))
+          = (Exact.Comment cmt (UnhelpfulSpan "") Nothing, Exact.DP (1,0))
           : merge [] news
         -- Fixup for doctests
         fixup s | s == vecImport VecV = vecImport vec
