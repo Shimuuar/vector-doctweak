@@ -96,18 +96,53 @@ pprVectorMod m = unstashCPP $ Exact.exactPrint (vecAST m) (vecAnns m)
 -- Adjust comments
 ----------------------------------------------------------------
 
-copyHaddock :: Set.Set RdrName -> VecMod -> VecMod -> VecMod
-copyHaddock touch from to = to
+data Vec
+  = VecV
+  | VecP
+  | VecU
+  | VecS
+  | VecG
+  deriving (Enum,Bounded)
+
+vecPath :: Vec -> FilePath
+vecPath = \case
+  VecV -> "Data/Vector.hs"
+  VecS -> "Data/Vector/Storable.hs"
+  VecU -> "Data/Vector/Unboxed.hs"
+  VecP -> "Data/Vector/Primitive.hs"
+  VecG -> "Data/Vector/Generic.hs"
+
+vecImport :: Vec -> String
+vecImport = \case
+  VecV -> "-- >>> import qualified Data.Vector as V"
+  VecU -> "-- >>> import qualified Data.Vector.Unboxed as U"
+  VecP -> "-- >>> import qualified Data.Vector.Primitive as P"
+  VecG -> "-- >>> import qualified Data.Vector.Generic as G"
+  VecS -> "-- >>> import qualified Data.Vector.Storable as S"
+
+vecAlias :: Vec -> Char
+vecAlias = \case
+  VecV -> 'V'
+  VecP -> 'P'
+  VecU -> 'U'
+  VecS -> 'S'
+  VecG -> 'G'
+
+targets :: [Vec]
+targets = [VecV, VecU, VecP, VecS]
+
+copyHaddock :: Vec -> Set.Set RdrName -> VecMod -> VecMod -> VecMod
+copyHaddock vec touch from to = to
   { vecAnns = appEndo update $ vecAnns to
   }
   where
     update   = fold haddocks
     haddocks = (if null touch then id else flip Map.restrictKeys touch)
-             $ Map.intersectionWith copyOneHaddock (vecExpKeys from) (vecExpKeys to)
+             $ Map.intersectionWith (copyOneHaddock vec) (vecExpKeys from) (vecExpKeys to)
 
-copyOneHaddock :: Haddock -> Haddock -> Endo Exact.Anns
-copyOneHaddock Haddock{hdkHaddock=[]} _ = mempty
-copyOneHaddock from to
+copyOneHaddock :: Vec -> Haddock -> Haddock -> Endo Exact.Anns
+copyOneHaddock _ Haddock{hdkHaddock=[]} _ = mempty
+copyOneHaddock vec from to
   | hdkHaddock from == hdkHaddock to = mempty
   | otherwise                        = Endo $ Map.adjust replace (hdkAnnotation to)
   where
@@ -121,29 +156,25 @@ copyOneHaddock from to
         --
         merge _ [] = []
         merge ((Exact.Comment _ sp _, dp):olds) (cmt:news)
-          = (Exact.Comment cmt sp Nothing, dp)
+          = (Exact.Comment (fixup cmt) sp Nothing, dp)
           : merge olds news
         merge [] (cmt:news)
-          = (Exact.Comment cmt (UnhelpfulSpan "") Nothing, Exact.DP (1,0))
+          = (Exact.Comment (fixup cmt) (UnhelpfulSpan "") Nothing, Exact.DP (1,0))
           : merge [] news
+        -- Fixup for doctests
+        fixup s | s == vecImport VecV = vecImport vec
+                | otherwise           = replaceQualifiers s
+        replaceQualifiers (' ':'V':'.':s) = ' ':vecAlias vec:'.': replaceQualifiers s
+        replaceQualifiers (c:s)           = c : replaceQualifiers s
+        replaceQualifiers []              = []
 
-
-pureV :: (String, [String])
-pureV =
-  ( "Data/Vector/Generic.hs"
-  , [ "Data/Vector.hs"
-    , "Data/Vector/Storable.hs"
-    , "Data/Vector/Unboxed.hs"
-    , "Data/Vector/Primitive.hs"
-    ]
-  )
 
 modPure :: FilePath -> Set.Set RdrName -> IO ()
 modPure prefix names = do
-  mG <- parseVectorMod $ prefix </> fst pureV
-  forM_ (snd pureV) $ \nm -> do
-    mV <- parseVectorMod $ prefix </> nm
-    writeFile (prefix </> nm) $ pprVectorMod $ copyHaddock names mG mV
+  mG <- parseVectorMod $ prefix </> vecPath VecG
+  forM_ (targets) $ \vec -> do
+    mV <- parseVectorMod $ prefix </> vecPath vec
+    writeFile (prefix </> vecPath vec) $! pprVectorMod $ copyHaddock vec names mG mV
 
 mkRdrName :: String -> RdrName
 mkRdrName = RdrName.mkUnqual OccName.varName . fromString
