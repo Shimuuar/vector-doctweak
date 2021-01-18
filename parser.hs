@@ -1,5 +1,6 @@
 {-# LANGUAGE ApplicativeDo      #-}
 {-# LANGUAGE LambdaCase         #-}
+{-# LANGUAGE MultiWayIf         #-}
 {-# LANGUAGE OverloadedStrings  #-}
 {-# LANGUAGE RecordWildCards    #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -9,12 +10,14 @@ import GHC
 import Data.Foldable
 import Data.Monoid
 import Data.String
+import Data.Maybe
 import Data.List       (isPrefixOf)
 import Data.Map.Strict ((!))
 import qualified Data.Map.Strict as Map
 import qualified Data.Set        as Set
 import Options.Applicative
 import System.FilePath ((</>))
+import Text.Regex.Applicative
 
 import qualified Language.Haskell.GHC.ExactPrint         as Exact
 import qualified Language.Haskell.GHC.ExactPrint.Types   as Exact
@@ -27,11 +30,63 @@ import qualified OccName
 -- Parsing
 ----------------------------------------------------------------
 
+-- | Split haddocks into hunk of normal documentation and doctests
+data HaddockHunk
+  = NormalHaddock [String]
+  | Doctest       [String]
+  deriving (Show,Eq)
+
+-- tst =
+--   [ "-- | /O(n)/ Yield the minimum element of the vector by comparing the results",
+--     "-- of a key function on each element. In case of a tie, the first occurrence",
+--     "-- wins. The vector may not be empty.",
+--     "--",
+--     "-- >>> import qualified Data.Vector as V",
+--     "-- >>> V.minimumOn fst $ V.fromList [(1.0,'a'), (1.0,'b')]",
+--     "-- (1.0,'a')",
+--     "--",
+--     "-- >>> ddd"
+--   ]
+
+splitHunks :: [String] -> [HaddockHunk]
+splitHunks hdk
+  = fromMaybe (error $ unlines $ "splitHunks: impossible" : hdk)
+  $ match (skip *> (chainN <|> pure [])) hdk
+  where
+    emptyline s = Nothing == match ("--" <* many (sym ' ')) s
+    skip    = many $ psym $ not . ("-- |" `isPrefixOf`)
+    normal  = fmap ((:[]) . NormalHaddock)
+            $ some $ psym $ not . ("-- >>>" `isPrefixOf`)
+    doctest = fmap ((:[]) . Doctest . concat)
+            $ some $ do x <- some $ psym ("-- >>>" `isPrefixOf`)
+                        y <- many $ psym $ not . emptyline
+                        z <- ((:[]) <$> psym emptyline) <|> pure []
+                        pure $ x ++ y ++ z
+    chainN = liftA2 (++) normal  (chainD <|> pure [])
+    chainD = liftA2 (++) doctest (chainN <|> pure [])
+
+
+
 data Haddock = Haddock
   { hdkAnnotation :: Exact.AnnKey
-  , hdkHaddock    :: [String]
+  , hdkHaddock    :: [HaddockHunk]
+  , hdkPragma     :: [Pragmas]
   }
   deriving Show
+
+data Pragmas
+  = NoDoctests [Vec]
+  deriving Show
+
+stripDoctest :: [HaddockHunk] -> [HaddockHunk]
+stripDoctest xs = [ x | x@NormalHaddock{} <- xs ]
+
+unpackHunks :: [HaddockHunk] -> [String]
+unpackHunks = concatMap $ \case
+  NormalHaddock x -> x
+  Doctest       x -> x
+
+
 
 data VecMod = VecMod
   { vecAnns    :: Exact.Anns      -- ^ Exactprint annotations
@@ -56,11 +111,20 @@ makeHaddock :: Exact.Anns -> Exact.AnnKey -> Haddock
 makeHaddock anns k = Haddock
   { hdkAnnotation = k
   , hdkHaddock    = comments
+  , hdkPragma     = parsePragma =<< Exact.annPriorComments (anns ! k)
   }
   where
-    comments = dropWhile (not . isPrefixOf "-- |")
-               [ c | (Exact.Comment c _ _, _) <- Exact.annPriorComments $ anns ! k ]
-
+    comments = splitHunks [ c | (Exact.Comment c _ _, _) <- Exact.annPriorComments $ anns ! k ]
+    parsePragma (Exact.Comment s _ _,_)
+      | Just vec <- match reNoDoctest s = [NoDoctests vec]
+      | otherwise                       = []
+    reNoDoctest = "--" *> many " " *> "NO_DOCTEST:" *> many " " *> many vec
+      where
+        vec = asum [ VecV <$ "V"
+                   , VecP <$ "P"
+                   , VecU <$ "U"
+                   , VecS <$ "S"
+                   ] <* many " "
 
 parseVectorMod :: FilePath -> IO VecMod
 parseVectorMod path = do
@@ -102,7 +166,7 @@ data Vec
   | VecU
   | VecS
   | VecG
-  deriving (Enum,Bounded)
+  deriving (Show,Eq,Enum,Bounded)
 
 vecPath :: Vec -> FilePath
 vecPath = \case
@@ -144,15 +208,15 @@ copyOneHaddock :: Vec -> Haddock -> Haddock -> Endo Exact.Anns
 copyOneHaddock _ Haddock{hdkHaddock=[]} _ = mempty
 copyOneHaddock vec from to
   | hdkHaddock from == hdkHaddock to = mempty
-  | otherwise                        = Endo $ Map.adjust replace (hdkAnnotation to)
+  | otherwise                        = Endo $ Map.adjust replaceCmt (hdkAnnotation to)
   where
-    replace a = a { Exact.annPriorComments = repl $ Exact.annPriorComments a }
+    replaceCmt a = a { Exact.annPriorComments = repl $ Exact.annPriorComments a }
 
-    repl old = keep ++ merge old (map fixup $ hdkHaddock from)
+    repl old = keep ++ merge old new
       where
         -- Number of non-haddock lines
-        n = length old - length (hdkHaddock to)
-        (keep,_replace) = splitAt n old
+        n    = length old - length (unpackHunks $ hdkHaddock to)
+        keep = take n old
         --
         merge _ [] = []
         merge ((Exact.Comment _ sp _, dp):olds) (cmt:news)
@@ -162,8 +226,15 @@ copyOneHaddock vec from to
           = (Exact.Comment cmt (UnhelpfulSpan "") Nothing, Exact.DP (1,0))
           : merge [] news
         -- Fixup for doctests
-        fixup s | s == vecImport VecV = vecImport vec
-                | otherwise           = replaceQualifiers s
+        droppedDoctests = concat [ t | NoDoctests t <- hdkPragma from ]
+        new = map fixup
+            $ unpackHunks
+            $ (if vec `elem` droppedDoctests then stripDoctest else id)
+            $ hdkHaddock from
+        fixup s
+          | "-- >>>" `isPrefixOf` s = replaceQualifiers s
+          | s == vecImport VecV     = vecImport vec
+          | otherwise               = s
         replaceQualifiers (' ':'V':'.':s) = ' ':vecAlias vec:'.': replaceQualifiers s
         replaceQualifiers (c:s)           = c : replaceQualifiers s
         replaceQualifiers []              = []
@@ -172,7 +243,7 @@ copyOneHaddock vec from to
 modPure :: FilePath -> Set.Set RdrName -> IO ()
 modPure prefix names = do
   mG <- parseVectorMod $ prefix </> vecPath VecG
-  forM_ (targets) $ \vec -> do
+  forM_ targets $ \vec -> do
     mV <- parseVectorMod $ prefix </> vecPath vec
     writeFile (prefix </> vecPath vec) $! pprVectorMod $ copyHaddock vec names mG mV
 

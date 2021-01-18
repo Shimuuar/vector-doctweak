@@ -22,3 +22,4 @@ Executable vector-doctweak
                , containers
                , filepath
                , optparse-applicative
+               , regex-applicative
