@@ -36,46 +36,30 @@ data HaddockHunk
   | Doctest       [String]
   deriving (Show,Eq)
 
--- tst =
---   [ "-- | /O(n)/ Yield the minimum element of the vector by comparing the results",
---     "-- of a key function on each element. In case of a tie, the first occurrence",
---     "-- wins. The vector may not be empty.",
---     "--",
---     "-- >>> import qualified Data.Vector as V",
---     "-- >>> V.minimumOn fst $ V.fromList [(1.0,'a'), (1.0,'b')]",
---     "-- (1.0,'a')",
---     "--",
---     "-- >>> ddd"
---   ]
+emptyHaddock :: String -> Bool
+emptyHaddock s = Nothing /= match ("--" <* many (sym ' ')) s
 
 splitHunks :: [String] -> [HaddockHunk]
 splitHunks hdk
   = fromMaybe (error $ unlines $ "splitHunks: impossible" : hdk)
   $ match (skip *> (chainN <|> pure [])) hdk
   where
-    emptyline s = Nothing == match ("--" <* many (sym ' ')) s
     skip    = many $ psym $ not . ("-- |" `isPrefixOf`)
     normal  = fmap ((:[]) . NormalHaddock)
             $ some $ psym $ not . ("-- >>>" `isPrefixOf`)
     doctest = fmap ((:[]) . Doctest . concat)
             $ some $ do x <- some $ psym ("-- >>>" `isPrefixOf`)
-                        y <- many $ psym $ not . emptyline
-                        z <- ((:[]) <$> psym emptyline) <|> pure []
+                        y <- many $ psym $ not . emptyHaddock
+                        z <- ((:[]) <$> psym emptyHaddock) <|> pure []
                         pure $ x ++ y ++ z
     chainN = liftA2 (++) normal  (chainD <|> pure [])
     chainD = liftA2 (++) doctest (chainN <|> pure [])
 
 
-
 data Haddock = Haddock
   { hdkAnnotation :: Exact.AnnKey
   , hdkHaddock    :: [HaddockHunk]
-  , hdkPragma     :: [Pragmas]
   }
-  deriving Show
-
-data Pragmas
-  = NoDoctests [Vec]
   deriving Show
 
 stripDoctest :: [HaddockHunk] -> [HaddockHunk]
@@ -111,20 +95,10 @@ makeHaddock :: Exact.Anns -> Exact.AnnKey -> Haddock
 makeHaddock anns k = Haddock
   { hdkAnnotation = k
   , hdkHaddock    = comments
-  , hdkPragma     = parsePragma =<< Exact.annPriorComments (anns ! k)
   }
   where
     comments = splitHunks [ c | (Exact.Comment c _ _, _) <- Exact.annPriorComments $ anns ! k ]
-    parsePragma (Exact.Comment s _ _,_)
-      | Just vec <- match reNoDoctest s = [NoDoctests vec]
-      | otherwise                       = []
-    reNoDoctest = "--" *> many " " *> "NO_DOCTEST:" *> many " " *> many vec
-      where
-        vec = asum [ VecV <$ "V"
-                   , VecP <$ "P"
-                   , VecU <$ "U"
-                   , VecS <$ "S"
-                   ] <* many " "
+
 
 parseVectorMod :: FilePath -> IO VecMod
 parseVectorMod path = do
@@ -159,6 +133,11 @@ pprVectorMod m = unstashCPP $ Exact.exactPrint (vecAST m) (vecAnns m)
 ----------------------------------------------------------------
 -- Adjust comments
 ----------------------------------------------------------------
+
+data CopyParam = CopyParam
+  { dropDoctests :: [Vec]
+  }
+  deriving Show
 
 data Vec
   = VecV
@@ -195,18 +174,18 @@ vecAlias = \case
 targets :: [Vec]
 targets = [VecV, VecU, VecP, VecS]
 
-copyHaddock :: Vec -> Set.Set RdrName -> VecMod -> VecMod -> VecMod
-copyHaddock vec touch from to = to
+copyHaddock :: CopyParam -> Vec -> Set.Set RdrName -> VecMod -> VecMod -> VecMod
+copyHaddock p vec touch from to = to
   { vecAnns = appEndo update $ vecAnns to
   }
   where
     update   = fold haddocks
     haddocks = (if null touch then id else flip Map.restrictKeys touch)
-             $ Map.intersectionWith (copyOneHaddock vec) (vecExpKeys from) (vecExpKeys to)
+             $ Map.intersectionWith (copyOneHaddock p vec) (vecExpKeys from) (vecExpKeys to)
 
-copyOneHaddock :: Vec -> Haddock -> Haddock -> Endo Exact.Anns
-copyOneHaddock _ Haddock{hdkHaddock=[]} _ = mempty
-copyOneHaddock vec from to
+copyOneHaddock :: CopyParam -> Vec -> Haddock -> Haddock -> Endo Exact.Anns
+copyOneHaddock _ _ Haddock{hdkHaddock=[]} _ = mempty
+copyOneHaddock CopyParam{..} vec from to
   | hdkHaddock from == hdkHaddock to = mempty
   | otherwise                        = Endo $ Map.adjust replaceCmt (hdkAnnotation to)
   where
@@ -226,26 +205,26 @@ copyOneHaddock vec from to
           = (Exact.Comment cmt (UnhelpfulSpan "") Nothing, Exact.DP (1,0))
           : merge [] news
         -- Fixup for doctests
-        droppedDoctests = concat [ t | NoDoctests t <- hdkPragma from ]
-        new = map fixup
+        new = reverse . dropWhile emptyHaddock . reverse
+            $ map fixup
             $ unpackHunks
-            $ (if vec `elem` droppedDoctests then stripDoctest else id)
+            $ (if vec `elem` dropDoctests then stripDoctest else id)
             $ hdkHaddock from
         fixup s
-          | "-- >>>" `isPrefixOf` s = replaceQualifiers s
           | s == vecImport VecV     = vecImport vec
+          | "-- >>>" `isPrefixOf` s = replaceQualifiers s
           | otherwise               = s
         replaceQualifiers (' ':'V':'.':s) = ' ':vecAlias vec:'.': replaceQualifiers s
         replaceQualifiers (c:s)           = c : replaceQualifiers s
         replaceQualifiers []              = []
 
 
-modPure :: FilePath -> Set.Set RdrName -> IO ()
-modPure prefix names = do
+modPure :: CopyParam -> FilePath -> Set.Set RdrName -> IO ()
+modPure p prefix names = do
   mG <- parseVectorMod $ prefix </> vecPath VecG
   forM_ targets $ \vec -> do
     mV <- parseVectorMod $ prefix </> vecPath vec
-    writeFile (prefix </> vecPath vec) $! pprVectorMod $ copyHaddock vec names mG mV
+    writeFile (prefix </> vecPath vec) $! pprVectorMod $ copyHaddock p vec names mG mV
 
 mkRdrName :: String -> RdrName
 mkRdrName = RdrName.mkUnqual OccName.varName . fromString
@@ -267,11 +246,12 @@ main = do
          <> progDesc ""
          )
   case cmd of
-    CopyHaddock{..} -> modPure copyPrefix (Set.fromList $ mkRdrName <$> functionNames)
+    CopyHaddock{..} -> modPure copyParam copyPrefix (Set.fromList $ mkRdrName <$> functionNames)
 
 data Cmd
   = CopyHaddock
     { copyPrefix    :: FilePath
+    , copyParam     :: CopyParam
     , functionNames :: [String]
     }
   deriving (Show)
@@ -289,7 +269,19 @@ parserCopyPrefix = helper <*> do
                          <> metavar "DIR"
                          <> value   "."
                           )
+  dropDoctests <- option
+    (maybeReader $ mapM $ \case
+        'V' -> Just VecV
+        'U' -> Just VecU
+        'S' -> Just VecS
+        'P' -> Just VecP
+        _   -> Nothing
+    )
+    (  long "drop-doctest"
+    <> help "drop doctests for given module"
+    <> value []
+    )
   functionNames <- many $ strArgument ( help    "Function to copy from"
                                      <> metavar "FUN"
                                       )
-  pure CopyHaddock{..}
+  pure CopyHaddock{copyParam=CopyParam{..}, ..}
