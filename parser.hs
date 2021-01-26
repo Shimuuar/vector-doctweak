@@ -158,18 +158,18 @@ vecPath = \case
 vecImport :: Vec -> String
 vecImport = \case
   VecV -> "-- >>> import qualified Data.Vector as V"
-  VecU -> "-- >>> import qualified Data.Vector.Unboxed as U"
-  VecP -> "-- >>> import qualified Data.Vector.Primitive as P"
-  VecG -> "-- >>> import qualified Data.Vector.Generic as G"
-  VecS -> "-- >>> import qualified Data.Vector.Storable as S"
+  VecU -> "-- >>> import qualified Data.Vector.Unboxed as VU"
+  VecP -> "-- >>> import qualified Data.Vector.Primitive as VP"
+  VecG -> "-- >>> import qualified Data.Vector.Generic as VG"
+  VecS -> "-- >>> import qualified Data.Vector.Storable as VS"
 
-vecAlias :: Vec -> Char
+vecAlias :: Vec -> String
 vecAlias = \case
-  VecV -> 'V'
-  VecP -> 'P'
-  VecU -> 'U'
-  VecS -> 'S'
-  VecG -> 'G'
+  VecV -> "V"
+  VecP -> "VP"
+  VecU -> "VU"
+  VecS -> "VS"
+  VecG -> "VG"
 
 targets :: [Vec]
 targets = [VecV, VecU, VecP, VecS]
@@ -214,7 +214,8 @@ copyOneHaddock CopyParam{..} vec from to
           | s == vecImport VecV     = vecImport vec
           | "-- >>>" `isPrefixOf` s = replaceQualifiers s
           | otherwise               = s
-        replaceQualifiers (' ':'V':'.':s) = ' ':vecAlias vec:'.': replaceQualifiers s
+        replaceQualifiers (' ':'V':'.':s) = " "<>vecAlias vec<>('.': replaceQualifiers s)
+        replaceQualifiers ('(':'V':'.':s) = "("<>vecAlias vec<>('.': replaceQualifiers s)
         replaceQualifiers (c:s)           = c : replaceQualifiers s
         replaceQualifiers []              = []
 
