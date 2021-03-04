@@ -205,7 +205,9 @@ copyOneHaddock CopyParam{..} vec from to
           = (Exact.Comment cmt (UnhelpfulSpan "") Nothing, Exact.DP (1,0))
           : merge [] news
         -- Fixup for doctests
-        new = reverse . dropWhile emptyHaddock . reverse
+        new = reverse
+            . dropWhile emptyHaddock . dropWhile (=="-- ==== __Examples__") .  dropWhile emptyHaddock
+            . reverse
             $ map fixup
             $ unpackHunks
             $ (if vec `elem` dropDoctests then stripDoctest else id)
