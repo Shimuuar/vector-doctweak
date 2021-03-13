@@ -208,19 +208,22 @@ copyOneHaddock CopyParam{..} vec from to
         new = reverse
             . dropWhile emptyHaddock . dropWhile (=="-- ==== __Examples__") .  dropWhile emptyHaddock
             . reverse
-            $ map fixup
+            $ map (fixup vec)
             $ unpackHunks
             $ (if vec `elem` dropDoctests then stripDoctest else id)
             $ hdkHaddock from
-        fixup s
-          | s == vecImport VecV     = vecImport vec
-          | "-- >>>" `isPrefixOf` s = replaceQualifiers s
-          | otherwise               = s
-        replaceQualifiers (' ':'V':'.':s) = " "<>vecAlias vec<>('.': replaceQualifiers s)
-        replaceQualifiers ('(':'V':'.':s) = "("<>vecAlias vec<>('.': replaceQualifiers s)
-        replaceQualifiers (c:s)           = c : replaceQualifiers s
-        replaceQualifiers []              = []
 
+fixup :: Vec -> String -> String
+fixup vec s
+  | s == vecImport VecV     = vecImport vec
+  | "-- >>>" `isPrefixOf` s = replaceQualifiers vec s
+  | otherwise               = s
+
+replaceQualifiers :: Vec -> String -> String
+replaceQualifiers vec (' ':'V':'.':s) = " "<>vecAlias vec<>('.': replaceQualifiers vec s)
+replaceQualifiers vec ('(':'V':'.':s) = "("<>vecAlias vec<>('.': replaceQualifiers vec s)
+replaceQualifiers vec (c:s)           = c : replaceQualifiers vec s
+replaceQualifiers _   []              = []
 
 modPure :: CopyParam -> FilePath -> Set.Set RdrName -> IO ()
 modPure p prefix names = do
