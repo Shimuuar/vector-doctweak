@@ -159,6 +159,14 @@ vecPath = \case
   VecP -> "Data/Vector/Primitive.hs"
   VecG -> "Data/Vector/Generic.hs"
 
+mvecPath :: Vec -> FilePath
+mvecPath = \case
+  VecV -> "Data/Vector/Mutable.hs"
+  VecS -> "Data/Vector/Storable/Mutable.hs"
+  VecU -> "Data/Vector/Unboxed/Mutable.hs"
+  VecP -> "Data/Vector/Primitive/Mutable.hs"
+  VecG -> "Data/Vector/Generic/Mutable.hs"
+
 vecImport :: Vec -> String
 vecImport = \case
   VecV -> "-- >>> import qualified Data.Vector as V"
@@ -178,16 +186,14 @@ vecAlias = \case
 targets :: [Vec]
 targets = [VecV, VecU, VecP, VecS]
 
-copyHaddock :: CopyParam -> Vec -> Set.Set RdrName -> VecMod -> VecMod -> VecMod
-copyHaddock CopyParam{..} vec touch from to = to
+copyHaddock :: Endo [HaddockHunk] -> Set.Set RdrName -> VecMod -> VecMod -> VecMod
+copyHaddock fixup touch from to = to
   { vecAnns = appEndo update $ vecAnns to
   }
   where
     update   = fold haddocks
     haddocks = (if null touch then id else flip Map.restrictKeys touch)
              $ Map.intersectionWith (copyOneHaddock fixup) (vecExpKeys from) (vecExpKeys to)
-    fixup    = Endo (if vec `elem` dropDoctests then stripDoctest else id)
-            <> Endo (fixupPureVectors vec)
 
 copyOneHaddock :: Endo [HaddockHunk] -> Haddock -> Haddock -> Endo Exact.Anns
 copyOneHaddock _ Haddock{hdkHaddock=[]} _ = mempty
@@ -230,17 +236,24 @@ replaceQualifiers vec (c:s)           = c : replaceQualifiers vec s
 replaceQualifiers _   []              = []
 
 modPure :: CopyParam -> FilePath -> Set.Set RdrName -> IO ()
-modPure p prefix names = do
+modPure CopyParam{..} prefix names = do
   mG <- parseVectorMod $ prefix </> vecPath VecG
   forM_ targets $ \vec -> do
+    let fixup = Endo (if vec `elem` dropDoctests then stripDoctest else id)
+             <> Endo (fixupPureVectors vec)
     mV <- parseVectorMod $ prefix </> vecPath vec
-    writeFile (prefix </> vecPath vec) $! pprVectorMod $ copyHaddock p vec names mG mV
+    writeFile (prefix </> vecPath vec) $! pprVectorMod $ copyHaddock fixup names mG mV
+
+modMut :: FilePath -> Set.Set RdrName -> IO ()
+modMut prefix names = do
+  mG <- parseVectorMod $ prefix </> mvecPath VecG
+  forM_ targets $ \vec -> do
+    let fixup = mempty
+    mV <- parseVectorMod $ prefix </> mvecPath vec
+    writeFile (prefix </> mvecPath vec) $! pprVectorMod $ copyHaddock fixup names mG mV
 
 mkRdrName :: String -> RdrName
 mkRdrName = RdrName.mkUnqual OccName.varName . fromString
-
-
-
 
 
 ----------------------------------------------------------------
@@ -257,6 +270,7 @@ main = do
          )
   case cmd of
     CopyHaddock{..} -> modPure copyParam copyPrefix (Set.fromList $ mkRdrName <$> functionNames)
+    CopyMut{..}     -> modMut  copyPrefix (Set.fromList $ mkRdrName <$> functionNames)
 
 data Cmd
   = CopyHaddock
@@ -264,12 +278,17 @@ data Cmd
     , copyParam     :: CopyParam
     , functionNames :: [String]
     }
+  | CopyMut
+    { copyPrefix    :: FilePath
+    , functionNames :: [String]
+    }
   deriving (Show)
 
 parserCLI :: Parser Cmd
-parserCLI = subparser
-  ( command "copy"  (parserCopyPrefix  `info` header "Copy haddocks")
-  )
+parserCLI = subparser $ mconcat
+  [ command "copy"  (parserCopyPrefix `info` header "Copy haddocks")
+  , command "mcopy" (parserCopyMut    `info` header "Copy haddocks for mutable vectors")
+  ]
 
 parserCopyPrefix :: Parser Cmd
 parserCopyPrefix = helper <*> do
@@ -295,3 +314,16 @@ parserCopyPrefix = helper <*> do
                                      <> metavar "FUN"
                                       )
   pure CopyHaddock{copyParam=CopyParam{..}, ..}
+
+parserCopyMut :: Parser Cmd
+parserCopyMut = helper <*> do
+  copyPrefix <- strOption ( short   'v'
+                         <> long    "vector"
+                         <> help    "path to vector's source"
+                         <> metavar "DIR"
+                         <> value   "."
+                          )
+  functionNames <- many $ strArgument ( help    "Function to copy from"
+                                     <> metavar "FUN"
+                                      )
+  pure CopyMut{..}
