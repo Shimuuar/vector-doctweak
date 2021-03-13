@@ -4,8 +4,10 @@
 {-# LANGUAGE OverloadedStrings  #-}
 {-# LANGUAGE RecordWildCards    #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TemplateHaskell    #-}
 module Main where
 
+import Control.Lens hiding (from,to)
 import GHC
 import Data.Foldable
 import Data.Monoid
@@ -35,6 +37,8 @@ data HaddockHunk
   = NormalHaddock [String]
   | Doctest       [String]
   deriving (Show,Eq)
+
+$(makePrisms ''HaddockHunk)
 
 emptyHaddock :: String -> Bool
 emptyHaddock s = Nothing /= match ("--" <* many (sym ' ')) s
@@ -175,17 +179,19 @@ targets :: [Vec]
 targets = [VecV, VecU, VecP, VecS]
 
 copyHaddock :: CopyParam -> Vec -> Set.Set RdrName -> VecMod -> VecMod -> VecMod
-copyHaddock p vec touch from to = to
+copyHaddock CopyParam{..} vec touch from to = to
   { vecAnns = appEndo update $ vecAnns to
   }
   where
     update   = fold haddocks
     haddocks = (if null touch then id else flip Map.restrictKeys touch)
-             $ Map.intersectionWith (copyOneHaddock p vec) (vecExpKeys from) (vecExpKeys to)
+             $ Map.intersectionWith (copyOneHaddock fixup) (vecExpKeys from) (vecExpKeys to)
+    fixup    = Endo (if vec `elem` dropDoctests then stripDoctest else id)
+            <> Endo (fixupPureVectors vec)
 
-copyOneHaddock :: CopyParam -> Vec -> Haddock -> Haddock -> Endo Exact.Anns
-copyOneHaddock _ _ Haddock{hdkHaddock=[]} _ = mempty
-copyOneHaddock CopyParam{..} vec from to
+copyOneHaddock :: Endo [HaddockHunk] -> Haddock -> Haddock -> Endo Exact.Anns
+copyOneHaddock _ Haddock{hdkHaddock=[]} _ = mempty
+copyOneHaddock fixup from to
   | hdkHaddock from == hdkHaddock to = mempty
   | otherwise                        = Endo $ Map.adjust replaceCmt (hdkAnnotation to)
   where
@@ -208,16 +214,14 @@ copyOneHaddock CopyParam{..} vec from to
         new = reverse
             . dropWhile emptyHaddock . dropWhile (=="-- ==== __Examples__") .  dropWhile emptyHaddock
             . reverse
-            $ map (fixup vec)
             $ unpackHunks
-            $ (if vec `elem` dropDoctests then stripDoctest else id)
+            $ appEndo fixup
             $ hdkHaddock from
 
-fixup :: Vec -> String -> String
-fixup vec s
-  | s == vecImport VecV     = vecImport vec
-  | "-- >>>" `isPrefixOf` s = replaceQualifiers vec s
-  | otherwise               = s
+fixupPureVectors :: Vec -> [HaddockHunk] -> [HaddockHunk]
+fixupPureVectors vec = each . _Doctest . each %~ \case
+  s | s == vecImport VecV -> vecImport vec
+    | otherwise           -> replaceQualifiers vec s
 
 replaceQualifiers :: Vec -> String -> String
 replaceQualifiers vec (' ':'V':'.':s) = " "<>vecAlias vec<>('.': replaceQualifiers vec s)
