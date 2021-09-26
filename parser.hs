@@ -122,7 +122,7 @@ parseVectorMod path = do
                    $ [ ( nm
                        , makeHaddock anns $ Exact.AnnKey loc (Exact.CN "TypeSig")
                        )
-                     | (L loc (SigD NoExt (TypeSig NoExt [L _ nm] _))) <- decls
+                     | (L loc (SigD _NoExt (TypeSig __NoExt [L _ nm] _))) <- decls
                      , nm `Set.member` exported
                      ]
       return $ VecMod
