@@ -175,6 +175,14 @@ vecImport = \case
   VecG -> "-- >>> import qualified Data.Vector.Generic as VG"
   VecS -> "-- >>> import qualified Data.Vector.Storable as VS"
 
+mvecImport :: Vec -> String
+mvecImport = \case
+  VecV -> "-- >>> import qualified Data.Vector.Mutable as MV"
+  VecU -> "-- >>> import qualified Data.Vector.Unboxed.Mutable as MVU"
+  VecP -> "-- >>> import qualified Data.Vector.Primitive.Mutable as MVP"
+  VecG -> "-- >>> import qualified Data.Vector.Generic.Mutable as MVG"
+  VecS -> "-- >>> import qualified Data.Vector.Storable.Mutable as MVS"
+
 vecAlias :: Vec -> String
 vecAlias = \case
   VecV -> "V"
@@ -182,6 +190,14 @@ vecAlias = \case
   VecU -> "VU"
   VecS -> "VS"
   VecG -> "VG"
+
+mvecAlias :: Vec -> String
+mvecAlias = \case
+  VecV -> "MV"
+  VecP -> "MVP"
+  VecU -> "MVU"
+  VecS -> "MVS"
+  VecG -> "MVG"
 
 targets :: [Vec]
 targets = [VecV, VecU, VecP, VecS]
@@ -229,11 +245,23 @@ fixupPureVectors vec = each . _Doctest . each %~ \case
   s | s == vecImport VecV -> vecImport vec
     | otherwise           -> replaceQualifiers vec s
 
+
+fixupMutVectors :: Vec -> [HaddockHunk] -> [HaddockHunk]
+fixupMutVectors vec = each . _Doctest . each %~ \case
+  s | s == mvecImport VecV -> mvecImport vec
+    | otherwise            -> replaceMQualifiers vec s
+
 replaceQualifiers :: Vec -> String -> String
 replaceQualifiers vec (' ':'V':'.':s) = " "<>vecAlias vec<>('.': replaceQualifiers vec s)
 replaceQualifiers vec ('(':'V':'.':s) = "("<>vecAlias vec<>('.': replaceQualifiers vec s)
 replaceQualifiers vec (c:s)           = c : replaceQualifiers vec s
 replaceQualifiers _   []              = []
+
+replaceMQualifiers :: Vec -> String -> String
+replaceMQualifiers vec (' ':'M':'V':'.':s) = " "<>vecAlias vec<>('.': replaceQualifiers vec s)
+replaceMQualifiers vec ('(':'M':'V':'.':s) = "("<>vecAlias vec<>('.': replaceQualifiers vec s)
+replaceMQualifiers vec (c:s)           = c : replaceQualifiers vec s
+replaceMQualifiers _   []              = []
 
 modPure :: CopyParam -> FilePath -> Set.Set RdrName -> IO ()
 modPure CopyParam{..} prefix names = do
@@ -248,7 +276,7 @@ modMut :: FilePath -> Set.Set RdrName -> IO ()
 modMut prefix names = do
   mG <- parseVectorMod $ prefix </> mvecPath VecG
   forM_ targets $ \vec -> do
-    let fixup = mempty
+    let fixup = Endo (fixupMutVectors vec)
     mV <- parseVectorMod $ prefix </> mvecPath vec
     writeFile (prefix </> mvecPath vec) $! pprVectorMod $ copyHaddock fixup names mG mV
 
